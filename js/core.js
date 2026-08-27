@@ -450,7 +450,9 @@ const loadData = async () => {
             localforage.getItem(getStorageKey('myStickerLibrary')),
             localforage.getItem(getStorageKey('customReplyGroups')),
             localforage.getItem(getStorageKey('customPokeGroups')),
-            localforage.getItem(getStorageKey('customStatusGroups'))
+            localforage.getItem(getStorageKey('customStatusGroups')),
+            localforage.getItem(getStorageKey('customPeriodCare')),
+            localforage.getItem(getStorageKey('myStickerGroups'))
         ]);
         const getVal = (index) => results[index].status === 'fulfilled' ? results[index].value : null;
 
@@ -475,6 +477,8 @@ const loadData = async () => {
         const savedReplyGroups = getVal(18);
         const savedPokeGroups = getVal(19);
         const savedStatusGroups = getVal(20);
+        const savedPeriodCare = getVal(21);
+        const savedMyStickerGroups = getVal(22);
 
         if (savedPartnerPersonas) partnerPersonas = savedPartnerPersonas;
 
@@ -503,6 +507,8 @@ const loadData = async () => {
         
         if (savedIntros) customIntros = savedIntros;
         else customIntros = CONSTANTS.WELCOME_ANIMATIONS.map(a => `${a.line1}|${a.line2}`);
+
+        customPeriodCare = savedPeriodCare || [];  // 没有内置预设，用户没配置就是空数组
 
         if (savedMessages && Array.isArray(savedMessages)) {
             messages = savedMessages.map(m => ({
@@ -543,6 +549,80 @@ const loadData = async () => {
         if (savedAnniversaries) anniversaries = savedAnniversaries;
         if (savedStickers) stickerLibrary = savedStickers;
         if (savedMyStickers) myStickerLibrary = savedMyStickers;
+        if (savedMyStickerGroups) window.myStickerGroups = savedMyStickerGroups;
+        else window.myStickerGroups = [];
+
+        // 迁移："我的表情库"以前是纯字符串数组（元素直接是图片地址），
+        // 现在要支持分组，每一项需要有自己的身份（id）和归属（groupId），
+        // 改成对象数组。只有第一次加载到旧格式数据时才会触发，转完就直接存回去，
+        // 以后不会再重复转。
+        (function _migrateMyStickerLibrary() {
+            if (!Array.isArray(myStickerLibrary) || !myStickerLibrary.length) return;
+            var needsMigration = myStickerLibrary.some(function (s) { return typeof s === 'string'; });
+            if (!needsMigration) return;
+            var base = Date.now();
+            var n = myStickerLibrary.length;
+            myStickerLibrary = myStickerLibrary.map(function (s, i) {
+                if (typeof s === 'string') {
+                    // 这个数组从老格式（纯字符串数组）那会儿开始，加新表情就一直是 unshift 塞到最前面
+                    // （见 app.js 的 myStickerLibrary.unshift），也就是说数组第0个本来就是"最新"那张，
+                    // 不是"最老"那张——时间戳要按这个真实规律倒着算，第0个给最大的时间戳，
+                    // 不然新的排序逻辑（按 addedAt 倒序）会把老数据的先后顺序整个搞反
+                    return { id: 'stk_' + base + '_' + i, src: s, groupId: null, addedAt: base + (n - 1 - i), groupJoinedAt: base + (n - 1 - i) };
+                }
+                return s; // 已经是新格式的，原样保留
+            });
+            try { localforage.setItem(getStorageKey('myStickerLibrary'), myStickerLibrary); } catch (e) {}
+        })();
+
+        // 一次性补救：上面那段迁移代码上线后，已经有一批用户的老表情包被那个"方向搞反"的
+        // bug 转换过一次了（转换本身已经完成，不会再走上面那条 needsMigration 分支）。
+        // 这里专门找出"当年被那个bug处理过"的那一批，把顺序倒回来——判断依据是：
+        // 一批条目的 id 共享同一个 'stk_<base>_' 前缀，且 addedAt 严格是 base, base+1, base+2...
+        // 这种连续整数（真实世界不同时间上传的表情，时间戳几乎不可能刚好差1毫秒排成这样，
+        // 这个特征几乎只有那个bug的产物才会有），符合的话就按当前数组位置重新倒序赋值一次。
+        // 用一个开关记一下修过了，不会同一批数据被反复橄来倒去
+        (function _fixMyStickerMigrationOrderBug() {
+            try {
+                if (localStorage.getItem('myStickerOrderFixApplied') === '1') return;
+            } catch (e) { return; }
+            if (!Array.isArray(myStickerLibrary) || !myStickerLibrary.length) {
+                try { localStorage.setItem('myStickerOrderFixApplied', '1'); } catch (e) {}
+                return;
+            }
+            // 按 id 里的 base 前缀分批，逐批检查是不是"连续整数"这个特征
+            var groups = {};
+            var order = [];
+            myStickerLibrary.forEach(function (entry, idx) {
+                if (!entry || typeof entry.id !== 'string') return;
+                var m = entry.id.match(/^stk_(\d+)_\d+$/);
+                if (!m) return;
+                var base = m[1];
+                if (!groups[base]) { groups[base] = []; order.push(base); }
+                groups[base].push({ entry: entry, idx: idx });
+            });
+            var fixedCount = 0;
+            order.forEach(function (base) {
+                var members = groups[base];
+                if (members.length < 2) return; // 单独一条不构成"批量迁移"的特征，跳过，避免误伤正常数据
+                // members 已经是按数组原始顺序收集的（forEach 天然顺序），检查是不是连续整数
+                var baseNum = Number(base);
+                var isSequential = members.every(function (m, i) { return m.entry.addedAt === baseNum + i; });
+                if (!isSequential) return; // 不符合特征，可能是正常数据凑巧共享了前缀，不动它
+                var n = members.length;
+                members.forEach(function (m, i) {
+                    var newVal = baseNum + (n - 1 - i);
+                    m.entry.addedAt = newVal;
+                    m.entry.groupJoinedAt = newVal;
+                });
+                fixedCount += n;
+            });
+            if (fixedCount > 0) {
+                try { localforage.setItem(getStorageKey('myStickerLibrary'), myStickerLibrary); } catch (e) {}
+                console.log('[sticker-fix] 已修正 ' + fixedCount + ' 张老表情包的排序方向');
+            }
+            try { localStorage.setItem('myStickerOrderFixApplied', '1'); } catch (e) {}
+        })();
         if (savedCustomThemes) customThemes = savedCustomThemes;
         if (savedThemeSchemes) themeSchemes = savedThemeSchemes;
         try { const ce = await localforage.getItem(getStorageKey('customEmojis')); if (ce && Array.isArray(ce)) customEmojis = ce; } catch(e) {}
@@ -642,6 +722,8 @@ const LIBRARY_CONFIG = {
         tabs: [
             { id: 'pokes', name: '拍一拍', mode: 'list' },
             { id: 'statuses', name: '对方状态', mode: 'list' },
+            { id: 'surveyBank', name: '问卷题库', mode: 'list' },
+            { id: 'period', name: '经期', mode: 'list' },
             { id: 'mottos', name: '顶部格言', mode: 'list' },
             { id: 'intros', name: '开场动画', mode: 'list' }
         ]
@@ -761,8 +843,10 @@ const saveData = async () => {
         { key: 'customStatuses',         val: () => localforage.setItem(getStorageKey('customStatuses'), customStatuses) },
         { key: 'customMottos',           val: () => localforage.setItem(getStorageKey('customMottos'), customMottos) },
         { key: 'customIntros',           val: () => localforage.setItem(getStorageKey('customIntros'), customIntros) },
+        { key: 'customPeriodCare',       val: () => localforage.setItem(getStorageKey('customPeriodCare'), customPeriodCare) },
         { key: 'stickerLibrary',         val: () => localforage.setItem(getStorageKey('stickerLibrary'), stickerLibrary) },
         { key: 'myStickerLibrary',       val: () => localforage.setItem(getStorageKey('myStickerLibrary'), myStickerLibrary) },
+        { key: 'myStickerGroups',        val: () => localforage.setItem(getStorageKey('myStickerGroups'), window.myStickerGroups || []) },
         { key: 'customThemes',           val: () => localforage.setItem(`${APP_PREFIX}customThemes`, customThemes) },
         { key: 'themeSchemes',           val: () => localforage.setItem(`${APP_PREFIX}themeSchemes`, themeSchemes) },
         { key: 'chatMessages',           val: () => localforage.setItem(getStorageKey('chatMessages'), messages) },
@@ -2437,6 +2521,7 @@ function showModal(modalElement, focusElement = null) {
                         if (customStatuses && customStatuses.length > 0) exportObj.customStatuses = customStatuses;
                         if (customMottos && customMottos.length > 0) exportObj.customMottos = customMottos;
                         if (customIntros && customIntros.length > 0) exportObj.customIntros = customIntros;
+                        if (customPeriodCare && customPeriodCare.length > 0) exportObj.customPeriodCare = customPeriodCare;
                         if (window.customReplyGroups && window.customReplyGroups.length > 0) exportObj.customReplyGroups = window.customReplyGroups;
                         if (window.customPokeGroups && window.customPokeGroups.length > 0) exportObj.customPokeGroups = window.customPokeGroups;
                         if (window.customStatusGroups && window.customStatusGroups.length > 0) exportObj.customStatusGroups = window.customStatusGroups;
@@ -2670,6 +2755,7 @@ function showModal(modalElement, focusElement = null) {
                         if (doReplies  && importedData.customPokes && Array.isArray(importedData.customPokes)) customPokes = importedData.customPokes;
                         if (doReplies  && importedData.customStatuses && Array.isArray(importedData.customStatuses)) customStatuses = importedData.customStatuses;
                         if (doReplies  && importedData.customMottos && Array.isArray(importedData.customMottos)) customMottos = importedData.customMottos;
+                        if (doReplies  && importedData.customPeriodCare && Array.isArray(importedData.customPeriodCare)) customPeriodCare = importedData.customPeriodCare;
                         if (doReplies  && importedData.customIntros && Array.isArray(importedData.customIntros)) customIntros = importedData.customIntros;
                         if (doReplies  && importedData.customReplyGroups) window.customReplyGroups = importedData.customReplyGroups;
                         if (doReplies  && importedData.customPokeGroups) window.customPokeGroups = importedData.customPokeGroups;

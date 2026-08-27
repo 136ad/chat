@@ -6287,7 +6287,7 @@
             height 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275),
             border-radius 0.4s ease,
             opacity 0.3s ease, visibility 0.3s ease;
-            z-index: 990;
+            z-index: 1550; /* 需高于 #couple-space-page(1500)，否则打开情侣空间后播放器会被盖住 */
             overflow: hidden;
             cursor: grab;
             border: 1px solid rgba(var(--accent-color-rgb), 0.12);
@@ -11009,6 +11009,10 @@ body #user-sticker-picker.sticker-picker-popover.active {
     right: auto !important;
     top: auto !important;
     bottom: auto !important;
+    /* 最外层再兜一层不透明底色——.combo-tabs-header 被隐藏之后，
+       分组图标行是这个面板里最先出现的东西，之前它自己的背景色没能完全盖住，
+       会露出后面的聊天内容。直接在最外层铺一层，不管里面任何子元素背景有没有问题都兜得住 */
+    background: var(--secondary-bg) !important;
 }
 
 body #user-sticker-picker .empty-sticker-tip {
