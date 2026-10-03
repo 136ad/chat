@@ -189,6 +189,10 @@
     var SRC = 'assets/audio/silence.mp3';
     var _audio = null;
     var _unlockBound = false;
+    var _audioCtx = null;
+    var _osc = null;
+    var _oscGain = null;
+    var _watchdogTimer = null;
 
     function _get() { return localStorage.getItem(KEY) === 'true'; }
 
@@ -198,10 +202,54 @@
         _audio.loop   = true;
         _audio.volume = 0.01;
         _audio.preload = 'auto';
-        _audio.addEventListener('play',  function(){ _setUI(true);  });
-        _audio.addEventListener('pause', function(){ _setUI(false); });
+        _audio.setAttribute('playsinline', '');
+        _audio.addEventListener('play',  function(){ _setUI(true);  _syncMediaSession(); });
+        _audio.addEventListener('pause', function(){ _setUI(false); _syncMediaSession(); });
         window._debugKeepaliveAudio = _audio;
         return _audio;
+    }
+
+    // 第二重保活：Web Audio 静音振荡器。部分浏览器会把 loop 的静音 <audio> 当成
+    // 可回收资源，振荡器让音频线程持续活跃，后台更不容易被冻结。
+    function _ensureOscillator() {
+        if (_osc) return;
+        try {
+            var Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            _audioCtx = _audioCtx || new Ctx();
+            _osc = _audioCtx.createOscillator();
+            _oscGain = _audioCtx.createGain();
+            _oscGain.gain.value = 0.0001;
+            _osc.type = 'sine';
+            _osc.frequency.value = 20;
+            _osc.connect(_oscGain);
+            _oscGain.connect(_audioCtx.destination);
+            _osc.start();
+        } catch (e) { _osc = null; }
+    }
+
+    function _resumeCtx() {
+        try { if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume(); } catch (e) {}
+    }
+
+    // 注册媒体会话，让系统把本页识别为"正在播放的媒体"，后台驻留更稳（成对出现时更明显）
+    function _syncMediaSession() {
+        try {
+            if (!('mediaSession' in navigator)) return;
+            if (_get()) {
+                var name = (typeof settings !== 'undefined' && settings.partnerName) || '传讯';
+                if (window.MediaMetadata) {
+                    navigator.mediaSession.metadata = new window.MediaMetadata({
+                        title: '后台保活中',
+                        artist: name,
+                        album: '传讯'
+                    });
+                }
+                navigator.mediaSession.playbackState = 'playing';
+            } else {
+                navigator.mediaSession.playbackState = 'none';
+            }
+        } catch (e) {}
     }
 
     function _setUI(playing) {
@@ -220,7 +268,7 @@
         }
         if (desc) {
             if (!_get())      desc.textContent = '保持后台运行，不错过ta的消息';
-            else if (playing) desc.textContent = '运行中 · 页面已保活';
+            else if (playing) desc.textContent = '运行中 · 音频 + 媒体会话双保活';
             else              desc.textContent = '等待交互后启动…';
         }
         if (row)  row.style.display = _get() ? 'flex' : 'none';
@@ -230,13 +278,18 @@
 
     function _start() {
         var a = _createAudio();
+        _ensureOscillator();
+        _resumeCtx();
         var p = a.play();
         if (p && p.then) {
-            p.catch(function(){
+            p.then(function(){ _syncMediaSession(); }).catch(function(){
                 _setUI(false);
                 if (!_unlockBound) {
                     _unlockBound = true;
-                    function unlock(){ if(_get()) a.play().catch(function(){}); _unlockBound=false; }
+                    function unlock(){
+                        if (_get()) { _resumeCtx(); a.play().catch(function(){}); }
+                        _unlockBound = false;
+                    }
                     document.addEventListener('touchstart', unlock, { once:true });
                     document.addEventListener('click',      unlock, { once:true });
                 }
@@ -246,7 +299,17 @@
 
     function _stop() {
         if (_audio) { _audio.pause(); _audio.currentTime = 0; }
+        try { if (_audioCtx && _audioCtx.state === 'running') _audioCtx.suspend(); } catch (e) {}
+        _syncMediaSession();
         _setUI(false);
+    }
+
+    // 看门狗：定时检查，被系统静音/暂停后自动拉起，避免保活悄悄失效
+    function _watchdog() {
+        if (!_get()) return;
+        _resumeCtx();
+        if (!_audio || _audio.paused) _start();
+        else _syncMediaSession();
     }
 
     window._toggleKeepaliveAudio = function() {
@@ -254,20 +317,29 @@
         localStorage.setItem(KEY, String(next));
         if (next) {
             _start();
-            if (typeof showNotification === 'function') showNotification('保活音频已开启 🎵', 'success', 2000);
+            if (typeof showNotification === 'function') showNotification('后台保活已开启 🎵', 'success', 2000);
             // 立即更新开关颜色，不等待异步 play() 返回
             _setUI(true);
         } else {
             _stop();
-            if (typeof showNotification === 'function') showNotification('保活音频已关闭', 'info', 1500);
+            if (typeof showNotification === 'function') showNotification('后台保活已关闭', 'info', 1500);
             _setUI(false);
         }
     };
 
     document.addEventListener('visibilitychange', function(){
-        if (_get() && document.visibilityState === 'visible' && _audio && _audio.paused) {
-            _audio.play().catch(function(){});
-        }
+        if (!_get()) return;
+        if (!_audio || _audio.paused) _start();
+        else _resumeCtx();
+    });
+    window.addEventListener('focus', function(){
+        if (_get() && (!_audio || _audio.paused)) _start();
+    });
+    window.addEventListener('pageshow', function(){
+        if (_get() && (!_audio || _audio.paused)) _start();
+    });
+    window.addEventListener('online', function(){
+        if (_get() && (!_audio || _audio.paused)) _start();
     });
 
     document.addEventListener('DOMContentLoaded', function(){
@@ -278,6 +350,8 @@
         _setUI(_get() && !!_audio && !_audio.paused);
         if (_get() && (!_audio || _audio.paused)) _start();
     }, 1800);
+    // 15 秒巡检一次；interval 很轻，不会影响正常使用
+    _watchdogTimer = setInterval(_watchdog, 15000);
 })();
 
 (function() {

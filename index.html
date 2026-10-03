@@ -14,8 +14,10 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
-    <link rel="icon" type="image/png" sizes="192x192" href="https://file.youtochat.com/images/20260216/1771224856844_qdqqd.jpeg">
-    <link rel="apple-touch-icon" href="https://file.youtochat.com/images/20260216/1771224856844_qdqqd.jpeg">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
+    <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
     <meta name="apple-mobile-web-app-title" content="ʚ𝑳𝑶𝑽𝑬ɞ">
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/localforage/1.10.0/localforage.min.js"></script>
@@ -2185,6 +2187,11 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
                             <div class="keepalive-wave-bar" style="animation-delay:0.05s;"></div>
                             <span style="font-size:11px;color:var(--accent-color);margin-left:6px;font-weight:600;">LIVE</span>
                         </div>
+                        <div class="setting-pill-row" id="pwa-install-row" onclick="window._installPWA && window._installPWA()" style="border-top:1px solid var(--border-color);">
+                            <span class="setting-pill-icon"><i class="fas fa-mobile-alt"></i></span>
+                            <span class="setting-pill-label">添加到桌面 <span style="font-size:11px;color:var(--text-secondary);font-weight:400;" id="pwa-install-desc">在 Chrome / Edge 里把应用装到桌面</span></span>
+                            <span class="setting-pill-icon" style="color:var(--accent-color);"><i class="fas fa-download"></i></span>
+                        </div>
                     </div>
                 </div>
 
@@ -3717,6 +3724,7 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
     <script src="js/app.js"></script>
     <script src="js/features/cinema.js"></script>
     <script src="js/features/global-msg-banner.js"></script>
+    <script src="js/pwa.js"></script>
     <script src="js/features/survey.js"></script>
     <script src="js/features/more-menu.js"></script>
     <script src="js/vendor/gsap.min.js"></script>

@@ -528,14 +528,45 @@ window._sendPartnerNotification = function(title, body) {
         if (!('Notification' in window)) return;
         if (Notification.permission !== 'granted') return;
         if (!document.hidden) return;
-        new Notification(title || '传讯', {
+        var titleText = title || '传讯';
+        var avatarSrc = (document.querySelector('#partner-avatar img') || {}).src;
+        var opts = {
             body: body || '对方发来了消息',
-            icon: (document.querySelector('#partner-avatar img') || {}).src,
+            icon: avatarSrc || 'assets/icons/icon-192.png',
+            badge: 'assets/icons/icon-192.png',
             tag: 'partner-msg',
             renotify: true
-        });
+        };
+        // 优先走 Service Worker：页面被系统挂起/冻结时依然能弹出提醒，
+        // 点击通知还能把已打开的应用窗口拉回前台。不支持时退回页面内 Notification。
+        var shown = false;
+        var viaSW = function (reg) {
+            if (shown) return;
+            if (reg && typeof reg.showNotification === 'function') {
+                shown = true;
+                reg.showNotification(titleText, Object.assign({}, opts, { data: { url: 'index.html' } }));
+            } else {
+                _fallbackPartnerNotification(titleText, opts);
+                shown = true;
+            }
+        };
+        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+            navigator.serviceWorker.ready.then(viaSW).catch(function () {
+                if (!shown) { _fallbackPartnerNotification(titleText, opts); shown = true; }
+            });
+            // 首次访问 SW 可能还没就绪，超时后退回页面通知，避免漏提醒
+            setTimeout(function () {
+                if (!shown) { _fallbackPartnerNotification(titleText, opts); shown = true; }
+            }, 1000);
+        } else {
+            _fallbackPartnerNotification(titleText, opts);
+        }
     } catch(e) {}
 };
+
+function _fallbackPartnerNotification(title, opts) {
+    try { new Notification(title, opts); } catch(e) {}
+}
 
 window.handleNotifToggle = function(checkbox) {
     var statusEl = document.getElementById('notif-status-text');
