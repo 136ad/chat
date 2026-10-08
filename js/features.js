@@ -279,6 +279,11 @@
         _setUI(_get() && !!_audio && !_audio.paused);
         if (_get() && (!_audio || _audio.paused)) _start();
     }, 1800);
+
+    // 兜底：部分安卓浏览器会在后台把音频暂停，定期尝试恢复播放（页面未被系统冻结时才生效）
+    setInterval(function(){
+        if (_get() && _audio && _audio.paused) { _audio.play().catch(function(){}); }
+    }, 20000);
 })();
 
 (function() {

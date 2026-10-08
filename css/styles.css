@@ -6189,13 +6189,34 @@
 
         @media (max-width: 360px) {
     .username {
-        display: none;
+        display: block;
+        font-size: 9px;
+        max-width: 32px;
     }
     .user-info {
         gap: 2px;
+        min-width: 34px;
     }
     .header-inner {
-        padding: 8px 5px;
+        padding: 8px 4px;
+        gap: 2px;
+    }
+    .header-actions {
+        gap: 2px;
+    }
+    .action-btn {
+        width: 26px;
+        height: 26px;
+        font-size: 13px;
+    }
+    .avatar-container,
+    .avatar {
+        width: 34px;
+        height: 34px;
+    }
+    .status {
+        font-size: 8px;
+        padding: 1px 3px;
     }
     .input-buttons {
         gap: 5px;

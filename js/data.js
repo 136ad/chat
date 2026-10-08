@@ -528,12 +528,27 @@ window._sendPartnerNotification = function(title, body) {
         if (!('Notification' in window)) return;
         if (Notification.permission !== 'granted') return;
         if (!document.hidden) return;
-        new Notification(title || '传讯', {
+
+        var t = title || '传讯';
+        var opts = {
             body: body || '对方发来了消息',
             icon: (document.querySelector('#partner-avatar img') || {}).src,
             tag: 'partner-msg',
             renotify: true
-        });
+        };
+
+        // 安卓 Chrome / Edge 不支持 new Notification()（会抛 Illegal constructor），
+        // 必须走 Service Worker 的 showNotification，否则手机上永远收不到通知。
+        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+            navigator.serviceWorker.ready.then(function(reg) {
+                return reg.showNotification(t, opts);
+            }).catch(function() {
+                try { new Notification(t, opts); } catch(e) {}
+            });
+            return;
+        }
+
+        new Notification(t, opts);
     } catch(e) {}
 };
 
