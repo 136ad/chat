@@ -7,6 +7,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#000000">
+    <link rel="manifest" href="manifest.json">
 
     <title>传讯</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -3812,6 +3813,16 @@ function openMomentsWithTransition(){
     ov.classList.remove('cs-trans-visible');
     setTimeout(function(){ov.classList.remove('cs-trans-show');},500);
   },4000);
+}
+</script>
+<script>
+/* 注册 Service Worker：让 Chrome / Edge 可以把本页装成类 App，并接管通知点击 */
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js').catch(function (e) {
+            console.warn('SW 注册失败', e);
+        });
+    });
 }
 </script>
 </body>
