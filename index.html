@@ -2169,6 +2169,11 @@ html[data-theme="dark"] #cs-transition-overlay{background:radial-gradient(circle
                                 <span class="notif-toggle-slider"></span>
                             </label>
                         </div>
+                        <div class="setting-pill-row" id="notif-privacy-toggle" onclick="window._toggleNotifPrivacy && window._toggleNotifPrivacy()" style="border-top:1px solid var(--border-color);">
+                            <span class="setting-pill-icon"><i class="fas fa-eye-slash"></i></span>
+                            <span class="setting-pill-label">隐藏消息内容 <span style="font-size:11px;color:var(--text-secondary);font-weight:400;" id="notif-privacy-desc">通知里不显示对方发了什么，只提示有一条新消息</span></span>
+                            <div class="setting-pill-switch" id="notif-privacy-switch"><div class="setting-pill-knob"></div></div>
+                        </div>
                         <div class="setting-pill-row" id="keepalive-audio-toggle" onclick="window._toggleKeepaliveAudio && window._toggleKeepaliveAudio()" style="border-top:1px solid var(--border-color);">
                             <span class="setting-pill-icon" style="position:relative;">
                                 <i class="fas fa-broadcast-tower"></i>

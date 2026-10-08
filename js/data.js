@@ -546,8 +546,10 @@ window._sendPartnerNotification = function(title, body) {
         if (Notification.permission !== 'granted') return;
         if (!document.hidden) return;
 
+        var privacy = localStorage.getItem('notifPrivacyEnabled') === '1';
+
         window._showSystemNotif(title || '传讯', {
-            body: body || '对方发来了消息',
+            body: privacy ? '你收到一条新消息' : (body || '对方发来了消息'),
             icon: (document.querySelector('#partner-avatar img') || {}).src,
             tag: 'partner-msg',
             renotify: true

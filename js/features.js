@@ -286,6 +286,41 @@
     }, 20000);
 })();
 
+// 通知隐私模式：开启后系统通知只提示"你收到一条新消息"，不显示具体内容（仿微信）
+(function() {
+    var KEY = 'notifPrivacyEnabled';
+
+    function _get() { return localStorage.getItem(KEY) === '1'; }
+
+    function _setUI() {
+        var on   = _get();
+        var sw   = document.getElementById('notif-privacy-switch');
+        var row  = document.getElementById('notif-privacy-toggle');
+        var desc = document.getElementById('notif-privacy-desc');
+        if (sw)  sw.classList.toggle('active', on);
+        if (row) row.classList.toggle('active', on);
+        if (desc) {
+            desc.textContent = on
+                ? '已开启 · 只提示"你收到一条新消息"，不显示内容'
+                : '通知里不显示对方发了什么，只提示有一条新消息';
+        }
+    }
+
+    window._toggleNotifPrivacy = function() {
+        var next = !_get();
+        localStorage.setItem(KEY, next ? '1' : '0');
+        _setUI();
+        if (typeof showNotification === 'function') {
+            showNotification(next ? '已开启内容隐藏 🔒' : '已关闭内容隐藏',
+                             next ? 'success' : 'info', 2000);
+        }
+    };
+
+    document.addEventListener('DOMContentLoaded', _setUI);
+    setTimeout(_setUI, 600);
+    setTimeout(_setUI, 1500);
+})();
+
 (function() {
     window._runMsgSearch = function() {
         var inp  = document.getElementById('msg-search-input');
