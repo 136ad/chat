@@ -522,23 +522,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-window._sendPartnerNotification = function(title, body) {
+// 统一的系统通知出口：安卓 Chrome / Edge 的页面端不支持 new Notification()
+// （会抛 TypeError: Illegal constructor），必须走 Service Worker 的 showNotification，
+// 否则手机上永远弹不出来。桌面浏览器则回退到 new Notification()。
+window._showSystemNotif = function(t, opts) {
     try {
-        if (localStorage.getItem('notifEnabled') !== '1') return;
-        if (!('Notification' in window)) return;
-        if (Notification.permission !== 'granted') return;
-        if (!document.hidden) return;
-
-        var t = title || '传讯';
-        var opts = {
-            body: body || '对方发来了消息',
-            icon: (document.querySelector('#partner-avatar img') || {}).src,
-            tag: 'partner-msg',
-            renotify: true
-        };
-
-        // 安卓 Chrome / Edge 不支持 new Notification()（会抛 Illegal constructor），
-        // 必须走 Service Worker 的 showNotification，否则手机上永远收不到通知。
         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
             navigator.serviceWorker.ready.then(function(reg) {
                 return reg.showNotification(t, opts);
@@ -547,8 +535,23 @@ window._sendPartnerNotification = function(title, body) {
             });
             return;
         }
-
         new Notification(t, opts);
+    } catch(e) {}
+};
+
+window._sendPartnerNotification = function(title, body) {
+    try {
+        if (localStorage.getItem('notifEnabled') !== '1') return;
+        if (!('Notification' in window)) return;
+        if (Notification.permission !== 'granted') return;
+        if (!document.hidden) return;
+
+        window._showSystemNotif(title || '传讯', {
+            body: body || '对方发来了消息',
+            icon: (document.querySelector('#partner-avatar img') || {}).src,
+            tag: 'partner-msg',
+            renotify: true
+        });
     } catch(e) {}
 };
 
@@ -564,7 +567,7 @@ window.handleNotifToggle = function(checkbox) {
             if (perm === 'granted') {
                 if (statusEl) statusEl.textContent = '✅ 已开启 — 当页面在后台时，收到消息会弹出系统通知';
                 localStorage.setItem('notifEnabled', '1');
-                try { new Notification('传讯通知已开启 ✨', { body: '你现在可以在后台收到消息提醒了', tag: 'notif-test' }); } catch(e) {}
+                window._showSystemNotif('传讯通知已开启 ✨', { body: '你现在可以在后台收到消息提醒了', tag: 'notif-test' });
             } else if (perm === 'denied') {
                 checkbox.checked = false;
                 if (statusEl) statusEl.textContent = '❌ 权限被拒绝，请自行搜索如何开启';
