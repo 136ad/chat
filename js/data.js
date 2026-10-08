@@ -548,9 +548,8 @@ window._sendPartnerNotification = function(title, body) {
 
         var privacy = localStorage.getItem('notifPrivacyEnabled') === '1';
 
-        window._showSystemNotif(title || '传讯', {
+        window._showSystemNotif(title || 'ʚ𝑳𝑶𝑽𝑬ɞ', {
             body: privacy ? '你收到一条新消息' : (body || '对方发来了消息'),
-            icon: (document.querySelector('#partner-avatar img') || {}).src,
             tag: 'partner-msg',
             renotify: true
         });
@@ -569,7 +568,7 @@ window.handleNotifToggle = function(checkbox) {
             if (perm === 'granted') {
                 if (statusEl) statusEl.textContent = '✅ 已开启 — 当页面在后台时，收到消息会弹出系统通知';
                 localStorage.setItem('notifEnabled', '1');
-                window._showSystemNotif('传讯通知已开启 ✨', { body: '你现在可以在后台收到消息提醒了', tag: 'notif-test' });
+                window._showSystemNotif('ʚ𝑳𝑶𝑽𝑬ɞ 通知已开启 ✨', { body: '你现在可以在后台收到消息提醒了', tag: 'notif-test' });
             } else if (perm === 'denied') {
                 checkbox.checked = false;
                 if (statusEl) statusEl.textContent = '❌ 权限被拒绝，请自行搜索如何开启';

@@ -1023,7 +1023,7 @@ if (customIntros && customIntros.length > 0) {
         scrambleText(subEl, line2, 2000);
     }, 600);
 } else {
-    document.getElementById('welcome-title-glitch').textContent = "传讯";
+    document.getElementById('welcome-title-glitch').textContent = "ʚ𝑳𝑶𝑽𝑬ɞ";
     document.getElementById('welcome-subtitle-scramble').textContent = "请在设置中添加开场动画";
 }
 
