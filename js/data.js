@@ -550,6 +550,7 @@ window._sendPartnerNotification = function(title, body) {
 
         window._showSystemNotif(title || 'ʚ𝑳𝑶𝑽𝑬ɞ', {
             body: privacy ? '你收到一条新消息' : (body || '对方发来了消息'),
+            icon: (document.querySelector('#partner-avatar img') || {}).src,
             tag: 'partner-msg',
             renotify: true
         });
