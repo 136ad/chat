@@ -77,6 +77,8 @@
     }
 
     function _previewText(msg) {
+        // 与系统通知共用同一个「隐藏消息内容」开关，开启后横条也只提示有新消息
+        if (localStorage.getItem('notifPrivacyEnabled') === '1') return '你收到一条新消息';
         var t = (msg && msg.text) ? String(msg.text).replace(/\n/g, ' ').trim() : '';
         if (!t) return (msg && msg.image) ? '[图片]' : '';
         return t.length > 24 ? t.slice(0, 24) + '…' : t;
