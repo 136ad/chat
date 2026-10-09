@@ -1977,11 +1977,6 @@ if (sessionId === currentSessionId) {
     "url": "https://img.heliar.top/file/1773543103115_first_snow.mp3.m4a"
   },
   {
-    "title": "我走以后",
-    "sub": "----",
-    "url": "http://music.163.com/song/media/outer/url?id=3347121761.mp3"
-  },
-  {
     "title": "偏爱",
     "sub": "等你的依赖 对你的偏爱",
     "url": "https://music.163.com/song/media/outer/url?id=5238992.mp3"
@@ -2953,6 +2948,94 @@ const savedCover = safeGetItem(APP_PREFIX + 'playerCover');
         showModal(addSongModal);
     }
 
+    // 批量粘贴导入用：把一段多行文本解析成歌曲数组。
+    // 每行一首，只要行里含链接就认；链接前的内容按「歌名 | 歌手」拆。
+    // 例："小半 | 陈粒 | https://a.com/x.mp3" / "小半,陈粒,https://a.com/x.mp3" / "小半 https://a.com/x.mp3"
+    function _parseSongLines(text) {
+        const out = [];
+        (text || '').split(/\r?\n/).forEach((line) => {
+            const raw = line.trim();
+            if (!raw || raw.startsWith('#')) return;      // 空行、# 注释行跳过
+            const m = raw.match(/(https?:\/\/[^\s|,，]+|oss:\/\/[^\s|,，]+)/i);
+            if (!m) return;                                // 没有链接的行忽略
+            const url = m[1].replace(/[)\]】，。、;；]+$/, '');
+            const head = raw.slice(0, raw.indexOf(m[1])).replace(/[|,，\t;；\-–—]+$/, '').trim();
+            const parts = head.split(/[|,，\t]+/).map(s => s.trim()).filter(Boolean);
+            const title = parts.length ? parts[0] : '';
+            const sub = parts.length > 1 ? parts.slice(1).join(' ') : '';
+            out.push({
+                title: title || '未命名',
+                sub: sub || '未知艺术家',
+                url: url,
+                isCustom: true
+            });
+        });
+        return out;
+    }
+
+    // 批量粘贴导入弹窗
+    function openBatchImportModal() {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.5);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn 0.2s ease;';
+        overlay.innerHTML = `
+            <div style="background:var(--secondary-bg);border-radius:16px;padding:18px;width:100%;max-width:430px;max-height:82vh;display:flex;flex-direction:column;gap:10px;border:1px solid var(--border-color);box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                <div style="text-align:center;font-weight:600;">批量导入歌单</div>
+                <div style="font-size:11.5px;color:var(--text-secondary);line-height:1.7;">
+                    每行一首，<b>行里带音频链接就行</b>，歌名和歌手可写可不写：<br>
+                    歌名 | 歌手 | 音频直链<br>
+                    歌名 | 音频直链
+                </div>
+                <textarea id="_pl_batch_text" spellcheck="false" placeholder="小半 | 陈粒 | https://example.com/xiaoban.mp3&#10;当你 | 林俊杰 | https://example.com/dangni.mp3&#10;https://example.com/only-url.mp3" style="flex:1;min-height:170px;resize:vertical;padding:10px;border-radius:10px;border:1px solid var(--border-color);background:var(--primary-bg);color:var(--text-primary);font-size:12.5px;line-height:1.8;font-family:inherit;"></textarea>
+                <div id="_pl_batch_tip" style="font-size:11.5px;color:var(--text-secondary);min-height:16px;">粘贴后会自动统计识别到的歌曲数</div>
+                <div style="display:flex;gap:10px;">
+                    <button id="_pl_batch_cancel" style="flex:1;padding:11px;border-radius:10px;border:1px solid var(--border-color);background:transparent;color:var(--text-secondary);font-size:14px;cursor:pointer;">取消</button>
+                    <button id="_pl_batch_ok" style="flex:1;padding:11px;border-radius:10px;border:none;background:var(--accent-color);color:#fff;font-size:14px;cursor:pointer;">导入</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const ta = overlay.querySelector('#_pl_batch_text');
+        const tip = overlay.querySelector('#_pl_batch_tip');
+        const close = () => overlay.remove();
+
+        overlay.addEventListener('click', (ev) => { if (ev.target === overlay) close(); });
+
+        ta.addEventListener('input', () => {
+            const n = _parseSongLines(ta.value).length;
+            const lines = ta.value.split(/\r?\n/).filter(l => l.trim() && !l.trim().startsWith('#')).length;
+            if (!ta.value.trim()) { tip.textContent = '粘贴后会自动统计识别到的歌曲数'; return; }
+            tip.textContent = `识别到 ${n} 首（共 ${lines} 行有效内容）` + (n < lines ? `，有 ${lines - n} 行没找到链接，会被忽略` : '');
+        });
+
+        overlay.querySelector('#_pl_batch_cancel').onclick = close;
+
+        overlay.querySelector('#_pl_batch_ok').onclick = () => {
+            const parsed = _parseSongLines(ta.value);
+            if (parsed.length === 0) {
+                tip.textContent = '没识别到任何带链接的歌曲，检查一下每行是不是都有音频直链';
+                tip.style.color = 'var(--accent-color)';
+                return;
+            }
+            close();
+            if (confirm(`识别到 ${parsed.length} 首歌曲。\n点击【确定】覆盖当前歌单\n点击【取消】追加到当前歌单末尾`)) {
+                songs = parsed;
+                showNotification(`歌单已覆盖，共 ${parsed.length} 首`, 'success');
+            } else {
+                songs = [...songs, ...parsed];
+                showNotification(`已追加 ${parsed.length} 首歌曲`, 'success');
+            }
+            searchTerm = '';
+            savePlaylist();
+            if (songs.length > 0 && currentIndex >= songs.length) {
+                currentIndex = 0;
+                loadSong(0);
+            }
+        };
+
+        setTimeout(() => ta.focus(), 100);
+    }
+
     function renderPlaylist() {
         playlist.innerHTML = '';
 
@@ -3010,6 +3093,11 @@ const savedCover = safeGetItem(APP_PREFIX + 'playerCover');
                         导入歌单文件
                     </button>
                     
+                    <button id="_pl_opt_batch" style="padding:12px;border-radius:10px;border:1px solid var(--border-color);background:var(--primary-bg);color:var(--text-primary);cursor:pointer;display:flex;align-items:center;gap:10px;font-size:14px;transition:0.2s;">
+                        <div style="width:32px;height:32px;background:rgba(var(--accent-color-rgb),0.1);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--accent-color);"><i class="fas fa-paste"></i></div>
+                        批量粘贴导入
+                    </button>
+
                     <button id="_pl_opt_export" style="padding:12px;border-radius:10px;border:1px solid var(--border-color);background:var(--primary-bg);color:var(--text-primary);cursor:pointer;display:flex;align-items:center;gap:10px;font-size:14px;transition:0.2s;">
                         <div style="width:32px;height:32px;background:rgba(var(--accent-color-rgb),0.1);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--accent-color);"><i class="fas fa-file-export"></i></div>
                         导出当前歌单
@@ -3049,6 +3137,12 @@ const savedCover = safeGetItem(APP_PREFIX + 'playerCover');
                 closeOpt();
                 const input = header.querySelector('#pl-import-input');
                 if (input) input.click();
+            };
+
+            const plOptBatchBtn = document.getElementById('_pl_opt_batch');
+            if (plOptBatchBtn) plOptBatchBtn.onclick = () => {
+                closeOpt();
+                openBatchImportModal();
             };
         });
         header.querySelector('#pl-import-input').addEventListener('change', (e) => {
