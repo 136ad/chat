@@ -2049,29 +2049,51 @@ function _makeOverlay() {
     return overlay;
 }
 
-// Emoji 批量粘贴：一串 emoji 常常是连着粘进来的（也可能用空格分开），
-// 所以除了换行，还要按空格和「字素」再拆一次——用 Intl.Segmenter 按字素拆，
-// 才不会把 👨‍👩‍👧 这种 ZWJ 组合表情、或带肤色修饰的表情拆坏。
+// Emoji 批量粘贴时怎么切分：
+//   - 一行 = 一条，这是硬分隔，永远认
+//   - 但一串 emoji 常常是连着粘的（😀😃😄），所以「整行都是 emoji」时再按空白 + 字素拆一次
+//   - 颜文字（(￣▽￣)、( -_-)旦~）里全是括号空格符号，一旦按空白或字素拆就全废了，
+//     所以只要这一行不「纯是 emoji」，就整行保留、一个字都不动
+// 允许空白是为了认「😀 😃 😄」这种用空格分隔的纯 emoji 串；颜文字里的括号、*
+// 之类字符不在允许集合里，所以带颜文字的行仍然会被判为「非纯 emoji」而整行保留
+const _EMOJI_ONLY_RE = /^(?=[\s\S]*(?:\p{Extended_Pictographic}|[\d#*]\uFE0F?\u20E3))(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\uFE0F|\u200D|\u20E3|[\d#*]|\s)+$/u;
+
+function _isEmojiOnlyLine(s) {
+    try { return _EMOJI_ONLY_RE.test(s); }
+    catch (e) { return false; }   // 老浏览器不支持 Unicode 属性转义就一律不拆
+}
+
 function _splitEmojiInput(text) {
-    const chunks = (text || '').split(/[\r\n\s]+/).map(s => s.trim()).filter(Boolean);
     let seg = null;
     try {
         if (typeof Intl !== 'undefined' && Intl.Segmenter) {
             seg = new Intl.Segmenter('zh', { granularity: 'grapheme' });
         }
     } catch (e) { /* 不支持就退回整块 */ }
-    if (!seg) return chunks;
-    const out = [];
-    chunks.forEach(chunk => {
+
+    // 把一个纯 emoji 片段按字素拆开；👨‍👩‍👧 / 🏳️‍🌈 / 👍🏽 这类组合表情会正确地算作一个
+    const splitByGrapheme = (run) => {
+        if (!seg) return [run];
         const parts = [];
         try {
-            for (const s of seg.segment(chunk)) parts.push(s.segment);
-        } catch (e) {
-            out.push(chunk); return;
+            for (const s of seg.segment(run)) parts.push(s.segment);
+        } catch (e) { return [run]; }
+        return parts.length > 1 ? parts : [run];
+    };
+
+    const out = [];
+    (text || '').split(/\r?\n/).forEach(rawLine => {
+        const line = rawLine.trim();
+        if (!line) return;
+        if (_isEmojiOnlyLine(line)) {
+            // 纯 emoji：空白也当分隔符，再逐段按字素拆
+            line.split(/\s+/).filter(Boolean).forEach(run => {
+                out.push(...splitByGrapheme(run));
+            });
+        } else {
+            // 颜文字 / 混了文字的行：整行当一条，不做任何拆分
+            out.push(line);
         }
-        // 单个字素就是一条（正常情况）；多个才拆开
-        if (parts.length > 1) out.push(...parts);
-        else out.push(chunk);
     });
     return out;
 }
@@ -2117,7 +2139,7 @@ function _showBatchAddDialog() {
 
     // Emoji 是连着粘的，提示文案跟文字类条目分开写
     const batchHint = currentSubTab === 'emojis'
-        ? '每行一个；也可以直接把一串 emoji 粘进来，会自动拆开'
+        ? '一行一个；emoji 一串连着粘也会自动拆开，颜文字请一行一个'
         : '每行一条，自动去重';
 
     panel.innerHTML = `
