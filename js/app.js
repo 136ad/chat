@@ -46,6 +46,27 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.warn('[boot] 紧急备份检查失败:', e);
         }
 
+        // 申请持久化存储：网页存储默认是 best-effort，手机空间紧张或长期不打开时，
+        // 浏览器会直接清掉整个站点的数据（聊天记录/歌单/字卡全没）。申请后转为 persistent，不会被自动清理。
+        // 放到启动最前面，越早申请越好。
+        try {
+            if (navigator.storage && navigator.storage.persist) {
+                const alreadyPersisted = navigator.storage.persisted
+                    ? await navigator.storage.persisted()
+                    : false;
+                if (alreadyPersisted) {
+                    console.log('[storage] 持久化存储：已开启');
+                } else {
+                    const granted = await navigator.storage.persist();
+                    console.log('[storage] 持久化存储申请结果：' + (granted ? '已开启' : '未授予'));
+                }
+            } else {
+                console.warn('[storage] 当前浏览器不支持持久化存储申请，数据仍为 best-effort');
+            }
+        } catch (e) {
+            console.warn('[storage] 申请持久化存储失败:', e);
+        }
+
         updateLoader('正在建立安全连接...', '10%');
         await safeAwait(initializeSession());
 

@@ -26,6 +26,7 @@
         +       '<div class="dm-stat-block"><div class="dm-stat-block-icon" style="color:#3BC8A4"><i class="fas fa-images"></i></div><div class="dm-stat-pill-val" id="dm-stat-media">—</div><div class="dm-stat-pill-key">图片媒体</div></div>'
         +     '</div>'
         +     '<div class="dm-progress-track"><div class="dm-progress-fill" id="dm-storage-bar" style="width:0%"></div></div>'
+        +     '<div id="dm-persist-note" style="font-size:11px;color:var(--text-secondary);opacity:0.72;margin-top:9px;line-height:1.5;"></div>'
         +   '</div>'
 
         +   '<div class="dm-section-label"><i class="fas fa-cloud-upload-alt"></i> 备份与恢复</div>'
@@ -212,6 +213,23 @@
         } else {
             if (totalEl) totalEl.textContent = fmt(total);
             if (barEl) barEl.style.width = '0%';
+        }
+
+        // 持久化状态：告诉用户数据到底会不会被系统自动清理（best-effort vs persistent）
+        var persistEl = g('dm-persist-note');
+        if (persistEl) {
+            if (navigator.storage && navigator.storage.persisted) {
+                navigator.storage.persisted().then(function (persisted) {
+                    persistEl.innerHTML = persisted
+                        ? '<i class="fas fa-shield-alt"></i> 持久化存储已开启，数据不会被系统自动清理'
+                        : '<i class="fas fa-exclamation-triangle"></i> 持久化存储未开启，手机空间紧张时数据可能被系统清理';
+                    persistEl.style.color = persisted ? '#3BC8A4' : '#FF9F0A';
+                }).catch(function () {
+                    persistEl.textContent = '';
+                });
+            } else {
+                persistEl.textContent = '';
+            }
         }
     }
 
