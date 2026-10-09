@@ -2049,9 +2049,44 @@ function _makeOverlay() {
     return overlay;
 }
 
+// Emoji 批量粘贴：一串 emoji 常常是连着粘进来的（也可能用空格分开），
+// 所以除了换行，还要按空格和「字素」再拆一次——用 Intl.Segmenter 按字素拆，
+// 才不会把 👨‍👩‍👧 这种 ZWJ 组合表情、或带肤色修饰的表情拆坏。
+function _splitEmojiInput(text) {
+    const chunks = (text || '').split(/[\r\n\s]+/).map(s => s.trim()).filter(Boolean);
+    let seg = null;
+    try {
+        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+            seg = new Intl.Segmenter('zh', { granularity: 'grapheme' });
+        }
+    } catch (e) { /* 不支持就退回整块 */ }
+    if (!seg) return chunks;
+    const out = [];
+    chunks.forEach(chunk => {
+        const parts = [];
+        try {
+            for (const s of seg.segment(chunk)) parts.push(s.segment);
+        } catch (e) {
+            out.push(chunk); return;
+        }
+        // 单个字素就是一条（正常情况）；多个才拆开
+        if (parts.length > 1) out.push(...parts);
+        else out.push(chunk);
+    });
+    return out;
+}
+
+// 按当前 tab 决定怎么把 textarea 里的内容切成一条条
+function _extractBatchLines(rawText) {
+    if (currentSubTab === 'emojis') return _splitEmojiInput(rawText);
+    return (rawText || '').split('\n').map(l => l.trim()).filter(Boolean);
+}
+
 function _showBatchAddDialog() {
     const ctx = _getGroupCtx();
-    const groups = ctx.groups;
+    // 只有真正支持分组的 tab 才显示分组选项：_getGroupCtx() 对不认识的分支会兜底返回「字卡分组」，
+    // 直接拿来用会把 Emoji / 相关字卡这类本来没有分组的条目错塞进字卡分组里
+    const groups = _tabHasGroups() ? ctx.groups : [];
     const overlay = _makeOverlay();
     const panel = document.createElement('div');
     panel.style.cssText = `
@@ -2080,13 +2115,18 @@ function _showBatchAddDialog() {
         </button>`).join('')}
     ` : '';
 
+    // Emoji 是连着粘的，提示文案跟文字类条目分开写
+    const batchHint = currentSubTab === 'emojis'
+        ? '每行一个；也可以直接把一串 emoji 粘进来，会自动拆开'
+        : '每行一条，自动去重';
+
     panel.innerHTML = `
         <style>
             @keyframes popIn { from{opacity:0;transform:scale(.93)} to{opacity:1;transform:scale(1)} }
             @keyframes baGroupSlide { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
         </style>
         <div style="flex-shrink:0;font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">批量添加${getCategoryName(currentSubTab)}</div>
-        <div style="flex-shrink:0;font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.6;">每行一条，自动去重</div>
+        <div style="flex-shrink:0;font-size:12px;color:var(--text-secondary);margin-bottom:14px;line-height:1.6;">${batchHint}</div>
 
         <div style="flex:1;overflow-y:auto;overflow-x:hidden;min-height:0;">
             <textarea id="batch-add-input" rows="10" placeholder="在此粘贴内容，每行一条…" style="
@@ -2132,7 +2172,7 @@ function _showBatchAddDialog() {
     const ta = panel.querySelector('#batch-add-input');
     const countEl = panel.querySelector('#batch-add-count');
     ta.addEventListener('input', () => {
-        const lines = ta.value.split('\n').filter(l => l.trim());
+        const lines = _extractBatchLines(ta.value);
         countEl.textContent = `${lines.length} 条`;
     });
     ta.addEventListener('focus', e => { e.target.style.borderColor = 'var(--accent-color)'; });
@@ -2198,7 +2238,7 @@ function _showBatchAddDialog() {
     panel.querySelector('#ba-cancel').onclick = () => overlay.remove();
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
     panel.querySelector('#ba-confirm').onclick = () => {
-        const lines = ta.value.split('\n').map(l => l.trim()).filter(Boolean);
+        const lines = _extractBatchLines(ta.value);
         if (!lines.length) { showNotification('请输入内容', 'warning'); return; }
         let added = 0, skipped = 0;
         const newItems = [];
@@ -2212,6 +2252,8 @@ function _showBatchAddDialog() {
                 ? customStatuses.some(r => normalizeStringStrict(r) === norm)
                 : currentSubTab === 'period'
                 ? customPeriodCare.some(r => normalizeStringStrict(r) === norm)
+                : currentSubTab === 'emojis'
+                ? customEmojis.some(r => normalizeStringStrict(r) === norm)
                 : false;
             if (isDup) { skipped++; return; }
             if (currentSubTab === 'custom') { customReplies.push(val); newItems.push(val); }
@@ -2219,6 +2261,7 @@ function _showBatchAddDialog() {
             else if (currentSubTab === 'statuses') { customStatuses.push(val); newItems.push(val); }
             else if (currentSubTab === 'mottos') customMottos.push(val);
             else if (currentSubTab === 'period') customPeriodCare.push(val);
+            else if (currentSubTab === 'emojis') { customEmojis.push(val); newItems.push(val); }
             added++;
         });
         if (_selectedGroupIdx >= 0 && newItems.length > 0 && groups) {
@@ -2356,16 +2399,7 @@ function initReplyLibraryListeners() {
             if (currentSubTab === 'stickers') {
                 document.getElementById('sticker-file-input')?.click(); return;
             }
-            if (currentSubTab === 'emojis') {
-                const input = prompt('请输入要添加的 Emoji（支持组合表情）:');
-                if (input?.trim()) {
-                    customEmojis.push(input.trim());
-                    throttledSaveData(); renderReplyLibrary();
-                    showNotification('✓ Emoji 已添加', 'success');
-                }
-                return;
-            }
-            if (currentSubTab === 'custom' || currentSubTab === 'pokes' || currentSubTab === 'statuses' || currentSubTab === 'period') {
+            if (currentSubTab === 'emojis' || currentSubTab === 'custom' || currentSubTab === 'pokes' || currentSubTab === 'statuses' || currentSubTab === 'period') {
                 _showBatchAddDialog(); return;
             }
             if (currentSubTab === 'surveyBank') {
@@ -2408,7 +2442,7 @@ function initReplyLibraryListeners() {
 }
 
 function getCategoryName(tabId) {
-    return { custom: '回复', pokes: '拍一拍', statuses: '状态', mottos: '格言', intros: '开场语', period: '相关字卡' }[tabId] || '内容';
+    return { custom: '回复', pokes: '拍一拍', statuses: '状态', mottos: '格言', intros: '开场语', period: '相关字卡', emojis: 'Emoji' }[tabId] || '内容';
 }
 
 function updateTabUI() {
