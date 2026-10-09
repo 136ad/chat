@@ -890,12 +890,10 @@ const saveData = async () => {
         function initializeRandomUI() {
 
 
-            document.querySelector('.header-motto').textContent = getRandomItem(CONSTANTS.HEADER_MOTTOS);
-if (customMottos && customMottos.length > 0) {
-    document.querySelector('.header-motto').textContent = getRandomItem(customMottos);
-} else {
-    document.querySelector('.header-motto').textContent = '';
-}
+            // 顶部格言：优先用自定义格言，没有则回退到默认格言。
+            // 原来这里在取完默认格言后又用 textContent = '' 清空了一次，导致顶部格言永远空白
+            const mottoList = (customMottos && customMottos.length > 0) ? customMottos : CONSTANTS.HEADER_MOTTOS;
+            document.querySelector('.header-motto').textContent = getRandomItem(mottoList) || '';
             const placeholder = "";
             DOMElements.messageInput.placeholder = placeholder.length > 20 ? placeholder.substring(0, 20) + "...": placeholder;
 

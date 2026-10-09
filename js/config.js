@@ -6,7 +6,7 @@
         const MESSAGES_PER_PAGE = 50;
         
         const CONSTANTS = {
-            HEADER_MOTTOS: [],
+            HEADER_MOTTOS: ['♡ 爱 ♡', '𝑳𝒐𝒗𝒆', '𝕰𝖈𝖍𝖔', 'Soulmate', '✦ 相遇 ✦', 'Destiny', '言葉', 'Melody'],
             WELCOME_ANIMATIONS: [{
                 line1: "♡ 爱 ♡",
                 line2: "✧ 正在连接我们的思绪 ✧"
