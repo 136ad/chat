@@ -2850,6 +2850,10 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
             }
         }
 
+// 离线提醒（Periodic Background Sync）回前台后要把队列表消息补投递进聊天，
+// push-notification-bridge.js 以 window.addMessage 为入口，这里把它暴露出去
+window.addMessage = addMessage;
+
 function showModal(modalElement, focusElement = null) {
             if (modalElement._hideTimeout) {
                 clearTimeout(modalElement._hideTimeout);

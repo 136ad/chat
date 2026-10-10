@@ -540,10 +540,18 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// 统一的系统通知出口：安卓 Chrome / Edge 的页面端不支持 new Notification()
-// （会抛 TypeError: Illegal constructor），必须走 Service Worker 的 showNotification，
-// 否则手机上永远弹不出来。桌面浏览器则回退到 new Notification()。
+// 统一的系统通知出口：统一走 PushBridge（浏览器 / APK 自适应）。
+// 它内部优先原生插件，浏览器端优先 Service Worker 的 showNotification
+// （安卓 Chrome / Edge 页面端不支持 new Notification()，会抛 Illegal constructor），
+// 桌面浏览器再回退到 new Notification()。PushBridge 未就绪时才走下面的旧路径。
 window._showSystemNotif = function(t, opts) {
+    opts = opts || {};
+    try {
+        if (typeof window.PushBridge !== 'undefined' && typeof window.PushBridge.send === 'function') {
+            window.PushBridge.send(t, opts.body || '', opts);
+            return;
+        }
+    } catch(e) { console.warn('[notify] PushBridge 发送异常，回退旧路径:', e); }
     try {
         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
             navigator.serviceWorker.ready.then(function(reg) {
@@ -557,7 +565,7 @@ window._showSystemNotif = function(t, opts) {
     } catch(e) {}
 };
 
-window._sendPartnerNotification = function(title, body) {
+window._sendPartnerNotification = function(title, body, options) {
     try {
         if (localStorage.getItem('notifEnabled') !== '1') return;
         if (!('Notification' in window)) return;
@@ -568,7 +576,6 @@ window._sendPartnerNotification = function(title, body) {
 
         window._showSystemNotif(title || 'ʚ𝑳𝑶𝑽𝑬ɞ', {
             body: privacy ? '你收到一条新消息' : (body || '对方发来了消息'),
-            icon: (document.querySelector('#partner-avatar img') || {}).src,
             tag: 'partner-msg',
             renotify: true
         });
@@ -577,6 +584,40 @@ window._sendPartnerNotification = function(title, body) {
 
 window.handleNotifToggle = function(checkbox) {
     var statusEl = document.getElementById('notif-status-text');
+
+    // 统一走 PushBridge 申请权限（原生 / 浏览器自适应）
+    if (typeof window.PushBridge !== 'undefined' && window.PushBridge.isAvailable()) {
+        if (checkbox.checked) {
+            window.PushBridge.requestPermission().then(function(perm) {
+                if (perm === 'granted') {
+                    if (statusEl) statusEl.textContent = '✅ 已开启 — 当页面在后台时，收到消息会弹出系统通知';
+                    localStorage.setItem('notifEnabled', '1');
+                    // 浏览器端发一条测试通知确认链路；APK 端交给原生，跳过
+                    if (!window.PushBridge.isNative()) {
+                        try { window._showSystemNotif('ʚ𝑳𝑶𝑽𝑬ɞ 通知已开启 ✨', { body: '你现在可以在后台收到消息提醒了', tag: 'notif-test' }); } catch(e) {}
+                    }
+                } else if (perm === 'denied') {
+                    checkbox.checked = false;
+                    if (statusEl) statusEl.textContent = '❌ 权限被拒绝，请到系统设置中开启通知权限';
+                    localStorage.setItem('notifEnabled', '0');
+                } else {
+                    checkbox.checked = false;
+                    if (statusEl) statusEl.textContent = '⚠️ 未做出选择，请重试';
+                    localStorage.setItem('notifEnabled', '0');
+                }
+            }).catch(function() {
+                checkbox.checked = false;
+                if (statusEl) statusEl.textContent = '❌ 请求权限失败，请自行搜索如何打开';
+                localStorage.setItem('notifEnabled', '0');
+            });
+        } else {
+            if (statusEl) statusEl.textContent = '已关闭 — 后台将不再弹出消息提醒';
+            localStorage.setItem('notifEnabled', '0');
+        }
+        return;
+    }
+
+    // 回退：原有的 Web Notification API
     if (!('Notification' in window)) {
         checkbox.checked = false;
         if (statusEl) statusEl.textContent = '⚠️ 您的浏览器不支持通知功能，请更换浏览器';
@@ -613,11 +654,19 @@ document.addEventListener('DOMContentLoaded', function() {
     var statusEl = document.getElementById('notif-status-text');
     if (!toggle) return;
     var enabled = localStorage.getItem('notifEnabled') === '1';
-    var granted = ('Notification' in window) && Notification.permission === 'granted';
+
+    // 原生环境走 PushBridge 的权限状态，浏览器端看 Notification.permission
+    var isNative = typeof window.PushBridge !== 'undefined' && window.PushBridge.isNative();
+    var granted = isNative
+        ? window.PushBridge.getStatus() === 'granted'
+        : ('Notification' in window) && Notification.permission === 'granted';
+
     toggle.checked = enabled && granted;
     if (!statusEl) return;
     if (toggle.checked) {
         statusEl.textContent = '✅ 已开启 — 当页面在后台时，收到消息会弹出系统通知';
+    } else if (isNative && window.PushBridge.getStatus() === 'denied') {
+        statusEl.textContent = '❌ 通知权限已被系统屏蔽，请到系统设置中开启';
     } else if ('Notification' in window && Notification.permission === 'denied') {
         statusEl.textContent = '❌ 通知权限已被浏览器屏蔽，请自行搜索如何开启';
     } else {

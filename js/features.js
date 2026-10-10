@@ -186,23 +186,169 @@
 
 (function() {
     var KEY = 'keepaliveAudioEnabled';
-    var SRC = 'assets/audio/silence.mp3';
-    var _audio = null;
+    // 持久层用 localforage(IndexedDB) 兜底：localStorage 在部分 WebView/Safari 重启(或隐私模式)后会被清空，
+    // 导致"后台保活"开关重启即被打回关闭。localStorage 仅作同步缓存，localforage 作为可靠持久化。
+    var LF_KEY = (typeof APP_PREFIX !== 'undefined' && APP_PREFIX ? APP_PREFIX : 'CHAT_APP_V3_') + 'keepaliveAudioEnabled';
+    // 内嵌静音音频（base64 WAV），完全本地，不依赖外网：
+    // 1) 移动端启动时不再拉远程音频，减少卡顿与网络重试；
+    // 2) 全程保持 muted=true 且 volume=0（真正静音、不出声）：
+    //    - WebView 只有在"非静音的音频输出"时才会申请音频焦点（Audio Focus）。
+    //      一旦拿到焦点，系统会压低其他正在播放的媒体（如音乐 App）的音量（duck），
+    //      而保活信号 24 小时不停播，焦点一直被占着，导致其他媒体音量迟迟不恢复，
+    //      必须刷新页面或手动切歌（重新申请焦点）才能恢复——这正是"发消息后音乐变小"的根因。
+    //    - 改成真正静音后，Chromium 不会为静音输出申请焦点，不再干扰其他媒体。
+    // 3) 定时器节流豁免由下方 gain=0 的 WebAudio 主信号提供：WebAudio 音频管线在持续渲染
+    //    （哪怕输出全零），页面仍被判定为"正在播放音频"，从而豁免隐藏页 JS 定时器节流。
+    var SRC = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YSADAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
+    var _audio = null;       // <audio> 兜底信号（全程静音，仅作备用，不申请音频焦点）
+    var _audioCtx = null;    // WebAudio 主保活信号（gain=0 绝对静音，不申请音频焦点、不占媒体通知位）
+    var _gainNode = null;
+    var _bufSrc = null;
     var _unlockBound = false;
+    var _retryTimer = null;
+    var _watchdogTimer = null;
+    var _wakeLock = null;
+    var _diagTick = 0;
+    var _enabled = null;
 
-    function _get() { return localStorage.getItem(KEY) === 'true'; }
+    function _readLocal() {
+        try { return localStorage.getItem(KEY) === 'true'; } catch (e) { return false; }
+    }
 
+    function _get() {
+        if (_enabled === null) _enabled = _readLocal();
+        return _enabled;
+    }
+
+    function _persist(en) {
+        _enabled = en;
+        try { localStorage.setItem(KEY, String(en)); } catch (e) {}
+        try {
+            if (typeof localforage !== 'undefined') localforage.setItem(LF_KEY, String(en)).catch(function () {});
+        } catch (e) {}
+    }
+
+    // ===== WebAudio 静音循环（主信号） =====
+    // 根因说明：Chromium 对隐藏页面会强制节流 JS 定时器（隐藏约 5 分钟后降为 1 次/分钟甚至冻结），
+    // 但"正在播放音频"的页面会被豁免。muted=true 的 <audio> 不算"正在播放"，
+    // 所以以前挂久了 JS 定时器照样被冻结、保活静默失效。
+    // 这里用 WebAudio 循环播放一段静音 buffer（gain=0）：音频管线持续运行 → 定时器豁免生效；
+    // 同时输出为绝对静音 → Chromium 不会为静音输出申请音频焦点 → 不再压低其他媒体音量。
+    // 部分 WebView 要求用户手势后 resume 才生效，因此也在 _bindUnlock 的每次手势里顺带调用本函数。
+    function _startAudioCtx() {
+        try {
+            var AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return false;
+            if (!_audioCtx) _audioCtx = new AC();
+            if (_audioCtx.state === 'suspended') {
+                var rp = _audioCtx.resume();
+                if (rp && rp.then) rp.catch(function () {});
+            }
+            if (_audioCtx.state !== 'running') return false;
+            if (!_bufSrc) {
+                var sr = _audioCtx.sampleRate || 44100;
+                var buf = _audioCtx.createBuffer(1, sr, sr);
+                // 注入约 -60dB 的超低频正弦，确保"非零输出"：Chromium 只有把页面判定为
+                // "正在播放音频"(audible) 才会豁免后台(隐藏页)的 JS 定时器节流/冻结。
+                // 纯静音(全 0)不被判定为播放中，后台 5 分钟后 setInterval 会被降到 1 次/分钟
+                // 甚至停摆，心跳/定时消息/自动回复全部失效。
+                // 原 APK 端曾用 gain=0 全静音以避免抢其他媒体的音频焦点，但这会直接废掉豁免，
+                // 故改为与网页端一致的极低幅值信号（约 -60dB，人耳几乎不可闻），豁免优先，
+                // 对手机媒体音量的影响极小。
+                var ch = buf.getChannelData(0);
+                for (var i = 0; i < ch.length; i++) {
+                    ch[i] = Math.sin((i / sr) * Math.PI * 2 * 200) * 0.001;
+                }
+                _bufSrc = _audioCtx.createBufferSource();
+                _bufSrc.buffer = buf;
+                _bufSrc.loop = true;
+                if (!_gainNode) {
+                    _gainNode = _audioCtx.createGain();
+                    _gainNode.gain.value = 1;
+                }
+                _bufSrc.connect(_gainNode);
+                _gainNode.connect(_audioCtx.destination);
+                _bufSrc.start();
+            }
+            return true;
+        } catch (e) {
+            console.warn('[keepalive] WebAudio 启动失败:', e);
+            return false;
+        }
+    }
+
+    function _stopAudioCtx() {
+        try {
+            if (_bufSrc) {
+                try { _bufSrc.stop(); } catch (e) {}
+                try { _bufSrc.disconnect(); } catch (e) {}
+                _bufSrc = null;
+            }
+            if (_audioCtx && _audioCtx.state !== 'closed') {
+                try { _audioCtx.close(); } catch (e) {}
+            }
+            _audioCtx = null; _gainNode = null;
+        } catch (e) {}
+    }
+
+    // ===== <audio> 兜底信号 =====
     function _createAudio() {
         if (_audio) return _audio;
         _audio = new Audio(SRC);
         _audio.loop   = true;
-        // 不能 muted / volume=0：iOS 会认为没在播放而不保活。音量保持极小值，声音由 silence.mp3（纯静音文件）保证听不到
-        _audio.volume = 0.01;
+        // 全程保持静音（muted=true、volume=0）：非静音的音频输出会触发 WebView 申请音频焦点，
+        // 抢走焦点后系统会压低其他媒体音量且迟迟不恢复（见模块头部说明）。静音播放不再干扰其他媒体，
+        // 仅作为 WebAudio 主信号之外的一路"备用播放中"信号；真正的定时器豁免由 WebAudio 提供。
+        _audio.volume = 0;
+        _audio.muted  = true;   // 保持静音：既能绕过自动播放策略，又不会申请音频焦点
         _audio.preload = 'auto';
-        _audio.addEventListener('play',  function(){ _setUI(true);  });
+        _audio._createdAt = Date.now();
+        _audio.addEventListener('play', function(){ _setUI(true); });
         _audio.addEventListener('pause', function(){ _setUI(false); });
-        window._debugKeepaliveAudio = _audio;
+        // 音频一旦出错/中断，自动重建重试，避免保活悄悄失效（本地资源重试开销极小）
+        ['error', 'abort', 'stalled', 'emptied'].forEach(function (evt) {
+            _audio.addEventListener(evt, function () {
+                console.warn('[keepalive] 音频事件:', evt);
+                if (_get()) _scheduleRetry();
+            });
+        });
         return _audio;
+    }
+
+    function _scheduleRetry() {
+        if (_retryTimer) clearTimeout(_retryTimer);
+        _retryTimer = setTimeout(function () {
+            _retryTimer = null;
+            if (!_get()) return;
+            // 重建音频元素，丢弃可能已损坏的对象
+            try { if (_audio) { _audio.pause(); _audio = null; } } catch (e) {}
+            _start();
+        }, 1000);
+    }
+
+    function _requestWakeLock() {
+        try {
+            if (!navigator.wakeLock || _wakeLock) return;
+            navigator.wakeLock.request('screen').then(function (lock) {
+                _wakeLock = lock;
+                var rel = function () { _wakeLock = null; };
+                try { lock.addEventListener('release', rel); } catch (e) {}
+            }).catch(function () {});
+        } catch (e) {}
+    }
+
+    function _releaseWakeLock() {
+        try {
+            if (_wakeLock) { _wakeLock.release().catch(function () {}); _wakeLock = null; }
+        } catch (e) {}
+    }
+
+    function _refreshForeground() {
+        try {
+            if (typeof ForegroundBridge !== 'undefined' && ForegroundBridge.isSupported()) {
+                ForegroundBridge.start();
+            }
+        } catch (e) {}
     }
 
     function _setUI(playing) {
@@ -220,70 +366,169 @@
             dot.className = 'keepalive-dot' + (playing ? ' alive' : '');
         }
         if (desc) {
-            if (!_get())      desc.textContent = '保持后台运行，不错过ta的消息';
+            if (!_get())  desc.textContent = '保持后台运行，不错过ta的消息';
             else if (playing) desc.textContent = '运行中 · 页面已保活';
-            else              desc.textContent = '等待交互后启动…';
+            else         desc.textContent = '已开启 · 正在自动拉起';
         }
         if (row)  row.style.display = _get() ? 'flex' : 'none';
         var bars = document.querySelectorAll('.keepalive-wave-bar');
         bars.forEach(function(b){ b.style.animationPlayState = playing ? 'running' : 'paused'; });
     }
 
+    function _bindUnlock() {
+        if (_unlockBound) return;
+        _unlockBound = true;
+        // 首次用户手势时启动/恢复 WebAudio（部分 WebView 要求手势后 resume 才生效）；
+        // 之后每次手势都顺带确保主信号在跑，防止被系统挂起后无法自愈。
+        function unlock() {
+            if (!_get()) return;
+            _startAudioCtx();
+            if (_audio && _audio.paused) _start();
+        }
+        ['touchstart', 'touchend', 'click', 'pointerdown'].forEach(function (ev) {
+            document.addEventListener(ev, unlock, { passive: true });
+        });
+    }
+
     function _start() {
         var a = _createAudio();
+        // 元素已损坏则重建，避免一直复用坏对象
+        if (a.error && Date.now() - a._createdAt > 3000) {
+            try { a.pause(); } catch (e) {}
+            _audio = null;
+            a = _createAudio();
+        }
         var p = a.play();
         if (p && p.then) {
-            p.catch(function(){
+            p.catch(function () {
                 _setUI(false);
-                if (!_unlockBound) {
-                    _unlockBound = true;
-                    function unlock(){ if(_get()) a.play().catch(function(){}); _unlockBound=false; }
-                    document.addEventListener('touchstart', unlock, { once:true });
-                    document.addEventListener('click',      unlock, { once:true });
-                }
+                _bindUnlock();
+                if (a.error) _scheduleRetry();
             });
+        } else {
+            _setUI(true);
         }
+        _startAudioCtx();   // 同步拉起 WebAudio 主信号
+        _requestWakeLock();
+        _refreshForeground();
     }
 
     function _stop() {
         if (_audio) { _audio.pause(); _audio.currentTime = 0; }
+        _stopAudioCtx();
+        _releaseWakeLock();
         _setUI(false);
+    }
+
+    // 是否"真在保活"：WebAudio 在渲染 或 <audio> 未暂停/未结束/未出错，任一信号有效即可
+    function _isReallyPlaying() {
+        var audioOk = !!_audio && !_audio.paused && !_audio.ended && !_audio.error;
+        var ctxOk = !!_audioCtx && _audioCtx.state === 'running' && !!_bufSrc;
+        return audioOk || ctxOk;
+    }
+
+    // 自愈入口：只要开启了保活就尽量让两个信号都真正跑起来。
+    // play() 在首次用户手势前会被自动播放策略拒绝，这里高频重试，
+    // 一旦用户点过一次（首次交互/回前台），无需再手动切换即可自动拉起到"运行中"。
+    function _ensureRunning() {
+        if (!_get()) return;
+        _startAudioCtx();
+        if (!_audio || _audio.paused || _audio.error) {
+            try { if (_audio && _audio.error) _audio = null; } catch (e) {}
+            _start();
+        }
+        _requestWakeLock();
+        _refreshForeground();
+        _setUI(_isReallyPlaying());
+    }
+
+    function _startWatchdog() {
+        if (_watchdogTimer) return;
+        // 高频巡检（3 秒）：发现任一保活信号没在跑就自动重试拉起，并顺带刷新原生前台服务，
+        // 确保持久运行，后台/息屏也能持续接收并弹出消息；无需依赖一次性 unlock 监听。
+        _watchdogTimer = setInterval(function () {
+            if (!_get()) return;
+            _ensureRunning();
+            if (++_diagTick % 20 === 0) {
+                console.log('[keepalive] 巡检', {
+                    audio: !!_audio && !_audio.paused && !_audio.error,
+                    ctx: _audioCtx ? _audioCtx.state : null,
+                    wake: !!_wakeLock
+                });
+            }
+        }, 3000);
     }
 
     window._toggleKeepaliveAudio = function() {
         var next = !_get();
-        localStorage.setItem(KEY, String(next));
+        _persist(next);
         if (next) {
+            _startWatchdog();
+            _bindUnlock();
+            _startAudioCtx();
             _start();
-            if (typeof showNotification === 'function') showNotification('保活音频已开启 🎵', 'success', 2000);
+            if (typeof showNotification === 'function') showNotification('后台保活已开启 🎵', 'success', 2000);
+            // 首次开启保活：引导开启悬浮窗权限（豁免后台启动限制），仅一次
+            try {
+                if (!localStorage.getItem('overlayGuided') && typeof ForegroundBridge !== 'undefined' && ForegroundBridge.isSupported()) {
+                    ForegroundBridge.isOverlayEnabled(function (enabled) {
+                        if (!enabled) {
+                            ForegroundBridge.requestOverlay().catch(function () {});
+                        }
+                        localStorage.setItem('overlayGuided', '1');
+                    });
+                }
+            } catch (e) {}
             // 立即更新开关颜色，不等待异步 play() 返回
             _setUI(true);
         } else {
             _stop();
-            if (typeof showNotification === 'function') showNotification('保活音频已关闭', 'info', 1500);
+            if (typeof showNotification === 'function') showNotification('后台保活已关闭', 'info', 1500);
             _setUI(false);
         }
     };
 
     document.addEventListener('visibilitychange', function(){
-        if (_get() && document.visibilityState === 'visible' && _audio && _audio.paused) {
-            _audio.play().catch(function(){});
+        if (_get() && document.visibilityState === 'visible') {
+            // 回到前台：立刻自愈拉起，不等下一次巡检
+            _ensureRunning();
+        } else if (document.visibilityState === 'hidden' && _get()) {
+            _refreshForeground();
         }
     });
 
+    function _startIfEnabled() {
+        if (!_get()) return;
+        _startWatchdog(); _bindUnlock(); _start();
+    }
+
+    function _hydrate() {
+        try {
+            if (typeof localforage === 'undefined') { _startIfEnabled(); return; }
+            localforage.getItem(LF_KEY).then(function (v) {
+                var en;
+                if (v === 'true') en = true;
+                else if (v === 'false') en = false;
+                else en = _readLocal();   // 旧版仅 localStorage：沿用旧值并回填到 localforage
+                _persist(en);
+                _setUI(_get());
+                _startIfEnabled();
+            }).catch(function () {
+                _startIfEnabled();
+            });
+        } catch (e) {
+            _startIfEnabled();
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', function(){
         _setUI(false);
-        if (_get()) _start();
+        _hydrate();
     });
     setTimeout(function(){
-        _setUI(_get() && !!_audio && !_audio.paused);
-        if (_get() && (!_audio || _audio.paused)) _start();
+        _setUI(_get() && _isReallyPlaying());
+        if (_get()) { _startWatchdog(); _bindUnlock(); _ensureRunning(); }
     }, 1800);
-
-    // 兜底：部分安卓浏览器会在后台把音频暂停，定期尝试恢复播放（页面未被系统冻结时才生效）
-    setInterval(function(){
-        if (_get() && _audio && _audio.paused) { _audio.play().catch(function(){}); }
-    }, 20000);
 })();
 
 // 通知隐私模式：开启后系统通知只提示"你收到一条新消息"，不显示具体内容（仿微信）
